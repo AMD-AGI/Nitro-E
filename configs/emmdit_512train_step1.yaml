@@ -1,0 +1,25 @@
+project_name: '512'
+exp_name: '512step1'
+model:
+  flashSA: 'Joint_SA' # choose from [ None, 'Joint_SA']
+  repa_depth: 8
+  caption_max_seq_length: 128
+
+training:
+  save_freq: 50000
+  max_iters: 100000
+  gradient_clip: 0.5
+  
+optimizer:
+  opt_kwargs:
+    lr: 3e-4
+
+dataset:
+  precompute_txt_emb: False
+  precompute_dino_feat: False
+  datasets: [
+            'datasets/prepare/datadir/mds/mds_train_512diffdb_fromflux', #The entire dataset takes up approximately 60+ GB
+            'datasets/prepare/datadir/mds/mds_train_512ucsc_fromflux', #The entire dataset takes up approximately 80+ GB
+            'datasets/prepare/datadir/mds/mds_train_512jdb', #The entire dataset takes up approximately 200+ GB
+            'datasets/prepare/datadir/mds/mds_train_512sa1b', #The entire dataset takes up approximately 600+ GB
+            ]
