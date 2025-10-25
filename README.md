@@ -84,9 +84,13 @@ from core.tools.inference_pipe import init_pipe
 
 device = torch.device('cuda:0')
 dtype = torch.bfloat16
-resolution = 512
 repo_name = "amd/Nitro-E"
+resolution = 512
 ckpt_name = 'Nitro-E-512px.safetensors'
+
+# for 1024px model
+# resolution = 1024
+# ckpt_name = 'Nitro-E-1024px.safetensors'
 
 pipe = init_pipe(device, dtype, resolution, repo_name=repo_name, ckpt_name=ckpt_name)
 prompt = 'A hot air balloon in the shape of a heart grand canyon'
