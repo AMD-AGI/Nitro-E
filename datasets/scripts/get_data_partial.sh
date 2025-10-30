@@ -36,12 +36,12 @@ python prepare/convert_total.py \
 
 #Precompute latents.  
 #journeyDB
-accelerate launch  --num_machines 1 --num_processes 2 --gpu_ids 2,3  prepare/precompute.py --datadir prepare/datadir/mds/512jdb --savedir prepare/datadir/mds/mds_train_512jdb --vae --image_resolutions 512 --vae --save_src
+accelerate launch  --num_machines 1 --num_processes 2 --gpu_ids 2,3  prepare/precompute.py --datadir prepare/datadir/mds/512jdb --savedir prepare/datadir/mds/mds_train_512jdb --vae --image_resolutions 512 --save_src
 #sa1b
 accelerate launch  --num_machines 1 --num_processes 2 --gpu_ids 2,3 prepare/precompute.py \
     --datadir prepare/datadir/mds/512sa1b \
     --savedir prepare/datadir/mds/mds_train_512sa1b \
-    --vae --image_resolutions 512 --vae --save_src
+    --vae --image_resolutions 512 --save_src
 
 
 #Generate synthetic data for 512px model train partial
