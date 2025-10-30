@@ -23,7 +23,7 @@ sys.path.insert(0, str(project_root))
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
-from datasets.prepare.base import build_streaming_total_precompute_dataloader,
+from datasets.prepare.base import build_streaming_total_precompute_dataloader
 
 from core.models.emmdit_pipeline import EMMDiTPipeline
 
