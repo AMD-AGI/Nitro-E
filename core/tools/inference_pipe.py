@@ -24,9 +24,9 @@ def init_pipe(device, dtype, resolution, repo_name, ckpt_name, ckpt_path_grpo=No
 
     vae = AutoencoderDC.from_pretrained(f"mit-han-lab/dc-ae-f32c32-sana-1.0-diffusers", torch_dtype=dtype).to(device).eval()
     if resolution == 1024:
-        transformer = EMMDiTTransformer(sample_size=resolution//32)
+        transformer = EMMDiTTransformer(sample_size=resolution//32, use_sub_attn=False)
     else:
-    	transformer = EMMDiTTransformer(sample_size=resolution//32, use_sub_attn=False)
+    	transformer = EMMDiTTransformer(sample_size=resolution//32, use_sub_attn=True)
     transformer.eval() 
     state_dict = load_file(hf_hub_download(repo_name, ckpt_name)) 
     transformer.load_state_dict(state_dict)
