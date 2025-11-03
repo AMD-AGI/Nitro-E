@@ -15,6 +15,7 @@ This repository provides training and data preparation scripts to reproduce our 
 
 ## 📝 Change Log
 - __[2025.10.24]__: 🔥Release [Nitro-E](https://huggingface.co/amd/Nitro-E) Release Nitro-E-512px model, Nitro-E-512px-GRPO post-training GRPO model, Nitro-E-512px-dist distilled model, training and inference code!
+- __[2025.10.31]__: 🔥Release our [Technical Report](https://arxiv.org/abs/2510.27135). Check it out! 
 
 ## Instruction
 ### Environment
