@@ -1,7 +1,7 @@
 # AMD Nitro-E
 
 <div>
-  <a href="https://advanced-micro-devices-rocm-blogs--1559.com.readthedocs.build/projects/internal/en/1559/artificial-intelligence/nitro-e/README.html"><img src="https://img.shields.io/badge/ROCm%20Developer%20Blog-red"></a> &ensp;
+  <a href="https://rocm.blogs.amd.com/artificial-intelligence/nitro-e/README.html"><img src="https://img.shields.io/badge/ROCm%20Developer%20Blog-red"></a> &ensp;
   <a href="https://huggingface.co/amd/Nitro-E"><img src="https://img.shields.io/badge/Nitro%20E-HuggingFace-yellow"></a> &ensp;
 </div>
 
