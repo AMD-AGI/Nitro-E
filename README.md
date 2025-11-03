@@ -15,7 +15,7 @@ This repository provides training and data preparation scripts to reproduce our 
 
 ## 📝 Change Log
 - __[2025.10.24]__: 🔥Release [Nitro-E](https://huggingface.co/amd/Nitro-E) Release Nitro-E-512px model, Nitro-E-512px-GRPO post-training GRPO model, Nitro-E-512px-dist distilled model, training and inference code!
-- __[2025.10.31]__: 🔥Release our [Technical Report](https://arxiv.org/abs/2510.27135). Check it out! 
+- __[2025.10.31]__: 🔥Release our [Technical Report](https://arxiv.org/abs/2510.27135). Check it out!
 
 ## Instruction
 ### Environment
@@ -88,12 +88,18 @@ dtype = torch.bfloat16
 repo_name = "amd/Nitro-E"
 resolution = 512
 ckpt_name = 'Nitro-E-512px.safetensors'
+grpo_name = 'ckpt_grpo_512px' #for grpo post training model
+use_grpo = True
 
 # for 1024px model
 # resolution = 1024
 # ckpt_name = 'Nitro-E-1024px.safetensors'
+# grpo_name = 'ckpt_grpo_1024px' 
 
-pipe = init_pipe(device, dtype, resolution, repo_name=repo_name, ckpt_name=ckpt_name)
+if use_grpo:
+    pipe = init_pipe(device, dtype, resolution, repo_name=repo_name, ckpt_name=ckpt_name, ckpt_path_grpo=grpo_name)
+else:
+    pipe = init_pipe(device, dtype, resolution, repo_name=repo_name, ckpt_name=ckpt_name)
 prompt = 'A hot air balloon in the shape of a heart grand canyon'
 images = pipe(prompt=prompt, width=resolution, height=resolution, num_inference_steps=20, guidance_scale=4.5).images
 ```
@@ -109,6 +115,9 @@ dtype = torch.bfloat16
 resolution = 512
 repo_name = "amd/Nitro-E"
 ckpt_name = 'Nitro-E-512px-dist.safetensors'
+
+# for 1024px model
+# ckpt_name = 'Nitro-E-1024px-dist.safetensors'
 
 pipe = init_pipe(device, dtype, resolution, repo_name=repo_name, ckpt_name=ckpt_name)
 prompt = 'A hot air balloon in the shape of a heart grand canyon'
