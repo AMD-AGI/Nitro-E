@@ -418,7 +418,12 @@ class EMMDiTTransformer(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalM
 
         self.norm_out = nn.LayerNorm(self.inner_dim, elementwise_affine=False, eps=1e-6)
         self.proj_out = nn.Linear(self.inner_dim, patch_size * patch_size * self.out_channels, bias=True)
-    
+
+        self.gradient_checkpointing = False
+        
+    def _set_gradient_checkpointing(self, module, value=False):
+        if hasattr(module, "gradient_checkpointing"):
+            module.gradient_checkpointing = value
             
     def forward(
         self,
@@ -482,7 +487,7 @@ class EMMDiTTransformer(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalM
                 # Skip specified layers
                 is_skip = True if skip_layers is not None and index_block in skip_layers else False
 
-                if torch.is_grad_enabled() and not is_skip:
+                if torch.is_grad_enabled() and self.gradient_checkpointing and not is_skip:
 
                     def create_custom_forward(module, return_dict=None):
                         def custom_forward(*inputs):
@@ -543,7 +548,6 @@ class EMMDiTTransformer(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalM
                 shape=(hidden_states.shape[0], self.out_channels, height * patch_size, width * patch_size)
             )
 
-
             if not return_dict:
                 return (output,)
 
@@ -551,7 +555,10 @@ class EMMDiTTransformer(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalM
         
         else:
             return hidden_states, zs
-
+            
+    def enable_gradient_checkpointing(self, nblocks_to_apply_grad_checkpointing):
+        self.gradient_checkpointing = True
+        
     @property
     # Copied from diffusers.models.unets.unet_2d_condition.UNet2DConditionModel.attn_processors
     def attn_processors(self) -> Dict[str, AttentionProcessor]:
