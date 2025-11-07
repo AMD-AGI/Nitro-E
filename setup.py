@@ -17,7 +17,7 @@ setup(
         'pandas==2.2.3',
         'omegaconf', 
         'datasets', 
-        'beautifulsoup4'
+        'beautifulsoup4',
         'tabulate',
         'sentencepiece==0.2.0',
         'ftfy',
