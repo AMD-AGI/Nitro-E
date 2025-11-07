@@ -30,7 +30,7 @@ docker pull rocm/pytorch:rocm6.2.2_ubuntu22.04_py3.10_pytorch_release_2.3.0
 
 #### Dependencies
 ```bash
-pip install diffusers==0.32.2 transformers==4.49.0 accelerate==1.7.0 wandb torchmetrics pycocotools torchmetrics[image] mosaicml-streaming==0.11.0 beautifulsoup4 tabulate timm==0.9.1 pyarrow einops omegaconf sentencepiece==0.2.0 pandas==2.2.3 alive-progress ftfy
+pip install diffusers==0.32.2 transformers==4.49.0 accelerate==1.7.0 wandb torchmetrics pycocotools torchmetrics[image] mosaicml-streaming==0.11.0 beautifulsoup4 tabulate timm==0.9.1 pyarrow einops omegaconf sentencepiece==0.2.0 pandas==2.2.3 alive-progress ftfy peft
 ```
 
 #### Install Flash attention
