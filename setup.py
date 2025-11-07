@@ -1,0 +1,28 @@
+from setuptools import setup, find_packages
+setup(
+    name="core",
+    packages=find_packages(include=["Nitro-E.*"]),
+    install_requires=[
+        'accelerate==1.7.0',
+        'diffusers==0.32.2',
+        'huggingface_hub',
+        'wandb',
+        'pycocotools',
+        'transformers==4.49.0',
+        'timm==0.9.1',
+        'einops',
+        'mosaicml-streaming<=0.11.0',
+        'torchmetrics',
+        'tqdm',
+        'pandas==2.2.3',
+        'omegaconf', 
+        'datasets', 
+        'beautifulsoup4'
+        'tabulate',
+        'sentencepiece==0.2.0',
+        'ftfy',
+        'alive-progress',
+        'pyarrow',
+        'peft'
+    ],
+)
