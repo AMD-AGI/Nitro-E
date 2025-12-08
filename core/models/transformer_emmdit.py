@@ -617,16 +617,3 @@ class EMMDiTTransformer(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalM
 
         for name, module in self.named_children():
             fn_recursive_attn_processor(name, module, processor)
-
-    def set_flash_attn_processor(self):
-
-        def fn_recursive_attn_processor(name: str, module: torch.nn.Module):
-            if hasattr(module, "set_processor"):
-                if name.endswith('attn1'):
-                    module.set_processor(AttnProcessor2_0_SAFA())
-
-            for sub_name, child in module.named_children():
-                fn_recursive_attn_processor(f"{name}.{sub_name}", child)
-
-        for name, module in self.named_children():
-            fn_recursive_attn_processor(name, module)
