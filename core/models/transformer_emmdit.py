@@ -321,11 +321,7 @@ class EMMDiTTransformer(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalM
         self.block_groups = nn.ModuleList()
         self.tokencompressor = nn.ModuleList()
         self.tokenreconstructor = nn.ModuleList()
-     
 
-        self.time_text_embed = None
-        self.patch_mixer_depth = None # initially no masking applied
-        self.mask_ratio = 0
         self.use_sub_attn = use_sub_attn # set if use ASA 
 
         self.block_split_stage = [4, 16, 4]
