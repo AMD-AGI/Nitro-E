@@ -84,5 +84,4 @@ See `test_pipe.py` for a complete example.
 
 Copyright (C) 2026 Advanced Micro Devices, Inc. All Rights Reserved.
 
-This project is licensed under the [MIT License](https://mit-license.org/).
-
+This project is licensed under the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0).
