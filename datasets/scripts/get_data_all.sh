@@ -47,6 +47,6 @@ accelerate launch  --num_machines 1 --num_processes 2 --gpu_ids 2,3 prepare/prec
 
 
 #Generate synthetic data for 512px model train total
-bash scripts/down_ucsc_parquet.sh 70
+bash scripts/down_ucsc_parquet.sh 39
 HIP_VISIBLE_DEVICES=1 python prepare/generate_fluxtotal.py --local_mds_dir prepare/datadir/mds/mds_train_512ucsc_fromflux --imgdim 512 --prompt_type ucsc --download_mode total
 HIP_VISIBLE_DEVICES=1 python prepare/generate_fluxtotal.py --local_mds_dir prepare/datadir/mds/mds_train_512diffdb_fromflux --imgdim 512 --prompt_type diffusiondb --download_mode total
