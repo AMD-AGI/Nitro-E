@@ -8,7 +8,9 @@ This repository provides the inference code and model definitions for Nitro-AR.
 
 ## 📝 Change Log
 
-- __[2026.1.12]__: 🔥 Initial Release of Nitro-AR inference code and model checkpoints.
+- __[2026.1.22]__: 📝 Blog post explaining Nitro-AR features and design: [AMD Nitro-AR Blog](https://rocm.blogs.amd.com/artificial-intelligence/nitro-ar/README.html)
+- __[2026.1.12]__: 🔥 Initial Release of Nitro-AR inference code and model checkpoints.  
+  - Model checkpoints: [Hugging Face](https://huggingface.co/amd/Nitro-AR)  
 
 ## Instruction
 
