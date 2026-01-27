@@ -14,9 +14,10 @@ Nitro-E is a family of text-to-image diffusion models focused on highly efficien
 This repository provides training and data preparation scripts to reproduce our results. We hope this codebase for efficient diffusion model training enables researchers to iterate faster on ideas and lowers the barrier for independent developers to build custom models.
 
 ## 📝 Change Log
-- __[2025.10.24]__: 🔥Release [Nitro-E](https://huggingface.co/amd/Nitro-E) Release Nitro-E-512px model, Nitro-E-512px-GRPO post-training GRPO model, Nitro-E-512px-dist distilled model, training and inference code!
-- __[2025.10.31]__: 🔥Release our [Technical Report](https://arxiv.org/abs/2510.27135). Check it out!
 - __[2026.01.12]__: 🔥 Release our autoregressive text-to-image model [Nitro-AR](https://github.com/AMD-AGI/Nitro-E/tree/main/Nitro-AR) inference code, along with Nitro-AR-512px-GAN and Nitro-AR-512px-Joint-GAN models on [Hugging Face](https://huggingface.co/amd/Nitro-AR).
+- __[2025.10.31]__: 🔥Release our [Technical Report](https://arxiv.org/abs/2510.27135). Check it out!
+- __[2025.10.24]__: 🔥Release [Nitro-E](https://huggingface.co/amd/Nitro-E) Release Nitro-E-512px model, Nitro-E-512px-GRPO post-training GRPO model, Nitro-E-512px-dist distilled model, training and inference code!
+
 
 ## Instruction
 ### Environment
