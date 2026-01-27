@@ -2,7 +2,7 @@
 
 ## 🔆 Introduction
 
-Nitro-AR adapts our previously released Nitro-E diffusion model to a masked autoregressive framework. With optimized sampling strategies such as joint sampling and adversarial fine-tuning, Nitro-AR improves both speed and few-step generation quality, demonstrating the robustness of our architecture across different paradigms.
+Nitro-AR adapts our previously released [Nitro-E](https://github.com/AMD-AGI/Nitro-E/tree/main) diffusion model to a masked autoregressive framework. With optimized sampling strategies such as joint sampling and adversarial fine-tuning, Nitro-AR improves both speed and few-step generation quality, demonstrating the robustness of our architecture across different paradigms.
 
 This repository provides the inference code and model definitions for Nitro-AR.
 
