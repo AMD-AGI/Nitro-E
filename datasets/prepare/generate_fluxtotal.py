@@ -239,10 +239,12 @@ def write_df(args: ArgumentParser ):
             for i in range(256):
                 pr_select.append(metadata_df['prompt'][i])
         elif args.download_mode == 'total':
-            metadata_df_select = metadata_df.drop_duplicates(subset=['prompt'], keep='first')
-            print('select prompt : ', len(metadata_df_select))
-            for i in range(len(metadata_df_select)):
-                pr_select.append(metadata_df_select['prompt'][i])
+            metadata_df_select = metadata_df.drop_duplicates(subset=['prompt'], keep='first')['prompt'].tolist()
+            #print(len(metadata_df_select))
+            max_select = 1200000
+            assert max_select > len(metadata_df_select)
+            pr_select=metadata_df_select[:max_select]
+            
 
     bs=args.bs
     for i in range(0,len(pr_select)-len(pr_select)%bs, bs):
