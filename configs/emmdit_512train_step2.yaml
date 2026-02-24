@@ -17,5 +17,4 @@ dataset:
             'datasets/prepare/datadir/mds/mds_train_512diffdb_fromflux', #The entire dataset takes up approximately 60+ GB
             'datasets/prepare/datadir/mds/mds_train_512ucsc_fromflux', #The entire dataset takes up approximately 80+ GB
             'datasets/prepare/datadir/mds/mds_train_512jdb', #The entire dataset takes up approximately 200+ GB
-            'datasets/prepare/datadir/mds/mds_train_512sa1b', #The entire dataset takes up approximately 600+ GB
             ]
