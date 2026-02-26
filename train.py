@@ -24,9 +24,7 @@ from safetensors.torch import load_file
 from omegaconf import OmegaConf
 from transformers import AutoModelForCausalLM,AutoTokenizer
 
-from core.utils import (token_drop,
-                        get_sigmas, patchify_and_apply_mask,
-                        ema_update)
+from core.utils import (token_drop, get_sigmas, ema_update)
 from core.opt import build_opt
 from core.model_builder import build_transformer
 from core.loss import build_loss
@@ -85,6 +83,7 @@ def main(args):
 
     noise_scheduler = FlowMatchEulerDiscreteScheduler(num_train_timesteps=cfg.training.num_train_timesteps,
                                                 shift=cfg.training.fm_shift)
+    noise_scheduler_copy = deepcopy(noise_scheduler)  # Klein: use copy for timestep/sigma lookup
 
     model = build_transformer(cfg.model)
 
@@ -233,39 +232,48 @@ def main(args):
             bs = latents.shape[0]
             noise = torch.randn_like(latents)
 
-            # timestep sampling and mix latent with noise
+            # Klein diffusers: timestep sampling and flow-matching noise injection
             u = compute_density_for_timestep_sampling(
-                    weighting_scheme=cfg.training.weighting_scheme,
-                    batch_size=bs,
-                    logit_mean=cfg.training.logit_mean,
-                    logit_std=cfg.training.logit_std,
-                    mode_scale=cfg.training.mode_scale,
-                )
-            indices = (u * noise_scheduler.config.num_train_timesteps).long()
-            timesteps = noise_scheduler.timesteps[indices]
-            sigmas = get_sigmas(timesteps, noise_scheduler, n_dim=latents.ndim).to(device=accelerator.device)
-            timesteps = timesteps.to(device=accelerator.device)
+                weighting_scheme=cfg.training.weighting_scheme,
+                batch_size=bs,
+                logit_mean=cfg.training.logit_mean,
+                logit_std=cfg.training.logit_std,
+                mode_scale=cfg.training.mode_scale,
+            )
+            indices = (u * noise_scheduler_copy.config.num_train_timesteps).long()
+            timesteps = noise_scheduler_copy.timesteps[indices].to(device=accelerator.device)
+            sigmas = get_sigmas(
+                timesteps, noise_scheduler_copy,
+                n_dim=latents.ndim,
+                device=accelerator.device,
+                dtype=latents.dtype,
+            )
             noisy_latents = (1.0 - sigmas) * latents + sigmas * noise
 
 
             grad_norm = None
             with accelerator.accumulate(model):
                 optimizer.zero_grad()
+                # Klein: timestep passed as t/1000
                 model_pred, zs_tilde = model(hidden_states=noisy_latents,
                                     encoder_hidden_states=y,
-                                    timestep=timesteps,
+                                    timestep=timesteps.to(noisy_latents.dtype) / 1000.0,
                                     encoder_attention_mask=y_mask,
                                     added_cond_kwargs={'resolution': None, 'aspect_ratio': None},
                                     return_dict=False)
                 weighting = compute_loss_weighting_for_sd3(weighting_scheme=cfg.training.weighting_scheme, sigmas=sigmas)
                 target = noise - latents
 
-                
-                model_pred = einops.rearrange(model_pred, 'n t (p1 p2 c) -> n c t (p1 p2)', 
-                                                p1=cfg.model.patch_size, p2=cfg.model.patch_size)
-
-                target = patchify_and_apply_mask(target, cfg.model.patch_size, )
-
+                # Klein-style loss: reshape model_pred to spatial (B,C,H,W), direct MSE with weighting
+                # model_pred: (B, seq_len, patch_size*patch_size*out_channels)
+                p = cfg.model.patch_size
+                h_lat, w_lat = noisy_latents.shape[-2:]
+                h_token, w_token = h_lat // p, w_lat // p
+                model_pred = einops.rearrange(
+                    model_pred,
+                    'b (h w) (p1 p2 c) -> b c (h p1) (w p2)',
+                    h=h_token, w=w_token, p1=p, p2=p,
+                )
                 loss = loss_fn(model_pred, target, weighting=weighting)
                 
                 accelerator.backward(loss.contiguous())
