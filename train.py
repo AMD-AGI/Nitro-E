@@ -24,20 +24,32 @@ from safetensors.torch import load_file
 from omegaconf import OmegaConf
 from transformers import AutoModelForCausalLM,AutoTokenizer
 
-from core.utils import (token_drop,  
+from core.utils import (token_drop,
                         get_sigmas, patchify_and_apply_mask,
                         ema_update)
 from core.opt import build_opt
-from core.loss import calc_diff_loss, calc_proj_loss
+from core.model_builder import build_transformer
+from core.loss import build_loss
 
 logging.basicConfig(level=logging.INFO)
 logger = get_logger(__name__)
 
 
+def load_config(path):
+    """Load config, resolving _base_ inheritance if present."""
+    cfg = OmegaConf.load(path)
+    if "_base_" in cfg:
+        base_path = cfg._base_
+        if not isinstance(base_path, str):
+            base_path = base_path[0]  # allow list, use first
+        base_cfg = load_config(base_path)
+        cfg = OmegaConf.merge(base_cfg, cfg)
+        del cfg["_base_"]
+    return cfg
+
+
 def main(args):
-    default_cfg = OmegaConf.load("configs/default_config.yaml")
-    custom_cfg = OmegaConf.load(args.config)
-    cfg = OmegaConf.merge(default_cfg, custom_cfg)
+    cfg = load_config(args.config)
     
 
     proj_dir = os.path.join(cfg.work_root, cfg.exp_name)
@@ -74,33 +86,8 @@ def main(args):
     noise_scheduler = FlowMatchEulerDiscreteScheduler(num_train_timesteps=cfg.training.num_train_timesteps,
                                                 shift=cfg.training.fm_shift)
 
-    from core.models.transformer_emmdit import EMMDiTTransformer
-    model = EMMDiTTransformer(
-            in_channels=cfg.model.in_channels,
-            out_channels=cfg.model.out_channels,
-            sample_size=cfg.model.latent_size,
-            patch_size=cfg.model.patch_size,
-            caption_channels=cfg.model.caption_channels,
-            qk_norm='rms_norm',
-            repa_depth=cfg.model.repa_depth,
-            projector_dim=cfg.model.projector_dim,
-            z_dims=cfg.model.z_dims,
-            use_sub_attn = True,
-        )
+    model = build_transformer(cfg.model)
 
-    if cfg.model.repa_depth != -1 and cfg.dataset.precompute_dino_feat is False:
-        import timm
-        visual_encoder = torch.hub.load('facebookresearch/dinov2', f'dinov2_vitb14')
-        del visual_encoder.head
-        visual_encoder.pos_embed.data = timm.layers.pos_embed.resample_abs_pos_embed(
-            visual_encoder.pos_embed.data, [16, 16],
-        )
-        visual_encoder.head = torch.nn.Identity()
-        visual_encoder = visual_encoder.to(accelerator.device)
-        visual_encoder.eval()
-        visual_encoder = torch.compile(visual_encoder)
-        
-    
     tokenizer = AutoTokenizer.from_pretrained(cfg.llama_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -122,12 +109,6 @@ def main(args):
 
     if cfg.training.transformer_ckpt != '':
         state_dict = load_file(cfg.training.transformer_ckpt)
-        if cfg.model.repa_depth == -1:
-            new_state_dict = {}
-            for k in state_dict:
-                if 'projector' not in k:
-                    new_state_dict[k] = state_dict[k]
-            state_dict = new_state_dict
         model.load_state_dict(state_dict)
 
     logger.info(f"{model.__class__.__name__} Model Parameters: {sum(p.numel() for p in model.parameters()):,}")
@@ -190,6 +171,8 @@ def main(args):
 
     optimizer, lr_scheduler = accelerator.prepare(optimizer, lr_scheduler)
 
+    loss_fn = build_loss(cfg.training.loss)
+
     global_step = 0
 
     latest_path = os.path.join(proj_dir, 'checkpoints', 'checkpoint-latest')
@@ -228,26 +211,14 @@ def main(args):
             """
             
             image_latents, prompts, jpg_tensors, txt_emb, txt_mask, dino_feat = batch
-            dino_feat = dino_feat.to(accelerator.device)
-            zs = [dino_feat]
             image_latents = image_latents.to(accelerator.device)
-            
+
             if cfg.dataset.precompute_txt_emb is False:
                 with torch.no_grad():
                     inputs = tokenizer(prompts, return_tensors="pt", padding='max_length', max_length=cfg.model.caption_max_seq_length, truncation=True)
                     inputs.to(accelerator.device)
                     txt_emb = model_text_encoder(**inputs, output_hidden_states=True)['hidden_states'][-1] #torch.Size([1, 128, 2048])
-                    txt_mask = inputs['attention_mask'] #torch.Size([1, 128])             
-                
-            if cfg.dataset.precompute_dino_feat is False:
-                with torch.no_grad():
-                    if cfg.model.repa_depth != -1:
-                        jpg_tensors = jpg_tensors.to(accelerator.device)
-                        z = visual_encoder.forward_features(jpg_tensors.cuda())
-                        z = z['x_norm_patchtokens'] #torch.Size([bs, 256, 768])
-                
-                        zs = [z]
-                    
+                    txt_mask = inputs['attention_mask'] #torch.Size([1, 128])
 
             latents = (image_latents * cfg.training.scaling_factor).to(weight_dtype)
             txt_mask = txt_mask.to(accelerator.device)
@@ -295,14 +266,7 @@ def main(args):
 
                 target = patchify_and_apply_mask(target, cfg.model.patch_size, )
 
-                diff_loss  = calc_diff_loss(model_pred, target, weighting)
-
-
-                if zs_tilde is not None:
-                    proj_loss = calc_proj_loss(zs, zs_tilde, )
-                    loss = diff_loss + proj_loss * cfg.training.proj_coeff
-                else:
-                    loss = diff_loss
+                loss = loss_fn(model_pred, target, weighting=weighting)
                 
                 accelerator.backward(loss.contiguous())
                 if accelerator.sync_gradients:
@@ -322,10 +286,8 @@ def main(args):
                     if accelerator.sync_gradients: 
                         ema_update(accelerator.unwrap_model(model_ema), accelerator.unwrap_model(model), cfg.training.ema_rate)
 
-            logs = {'loss': accelerator.gather(diff_loss).mean().item(), 
-                        'lr': lr_scheduler.get_last_lr()[0]}
-            if zs_tilde is not None:
-                logs['proj_loss'] = accelerator.gather(proj_loss).mean().item()
+            logs = {'loss': accelerator.gather(loss).mean().item(),
+                    'lr': lr_scheduler.get_last_lr()[0]}
             if grad_norm is not None:
                 logs['grad_norm'] = accelerator.gather(grad_norm).mean().item()
 

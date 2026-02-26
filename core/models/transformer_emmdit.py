@@ -311,11 +311,8 @@ class EMMDiTTransformer(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalM
         out_channels: int = 32,
         interpolation_scale: int = None,
         pos_embed_max_size: int = 96,
-        use_sub_attn: bool=True, 
+        use_sub_attn: bool=True,
         qk_norm: str = 'rms_norm',
-        repa_depth = -1,
-        projector_dim=2048,
-        z_dims=[768],
     ):
         super().__init__()
         self.block_groups = nn.ModuleList()
@@ -329,15 +326,6 @@ class EMMDiTTransformer(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalM
         default_out_channels = in_channels
         self.out_channels = out_channels if out_channels is not None else default_out_channels
         self.inner_dim = self.config.num_attention_heads * self.config.attention_head_dim
-
-        if repa_depth != -1:
-            from core.models.projector import build_projector
-            self.projectors = nn.ModuleList([
-                build_projector(self.inner_dim, projector_dim, z_dim) for z_dim in z_dims
-                ])
-            
-            assert repa_depth >= 0 and repa_depth < num_layers
-            self.repa_depth = repa_depth
 
         interpolation_scale = max(self.config.sample_size // 16, 1)
 
@@ -512,9 +500,6 @@ class EMMDiTTransformer(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalM
                     )
                 
                 
-            if self.repa_depth != -1 and grp_ids == 0:
-                if self.training:
-                    zs = [projector(hidden_states) for projector in self.projectors]
             if grp_ids < ds_num:
                 encoder_feats.append(hidden_states)
 

@@ -5,21 +5,26 @@ exp_name: 'exp'
 llama_path: 'meta-llama/Llama-3.2-1B'
 
 model:
+  _target_: core.models.transformer_emmdit.EMMDiTTransformer
   flashSA: 'Joint_SA' # choose from ['none', 'Joint_SA']
   patch_size: 1
   latent_size: 16
+  sample_size: ${.latent_size}
   in_channels: 32
   out_channels: 32
   caption_max_seq_length: 120
   caption_channels: 2048
   #arch: 'sub'
 
-  # args for REPA
-  repa_depth: -1 # [0, num_blocks-1], None for not using
-  projector_dim: 2048 
-  z_dims: [768]
+  # transformer params
+  qk_norm: 'rms_norm'
+  use_sub_attn: true
 
 training:
+  loss:
+    _target_: core.loss.DiffLoss
+    params: {}
+
   gradient_accumulation_steps: 1
   train_batch_size: 256
   num_workers: 16
@@ -38,7 +43,6 @@ training:
   start_step: 0
   use_ema: False
   ema_rate: 0.9999
-  proj_coeff: 0.5
 
   # args for timestep sampling
   weighting_scheme: 'logit_normal' 
@@ -71,7 +75,6 @@ optimizer:
 dataset:
   use_dummy_data: False
   precompute_txt_emb: False
-  precompute_dino_feat: False
   datasets: [
     'train',
     'valid' 

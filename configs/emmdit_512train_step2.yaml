@@ -12,7 +12,6 @@ training:
   
 dataset:
   precompute_txt_emb: False
-  precompute_dino_feat: False
   datasets: [
             'datasets/prepare/datadir/mds/mds_train_512diffdb_fromflux', #The entire dataset takes up approximately 60+ GB
             'datasets/prepare/datadir/mds/mds_train_512ucsc_fromflux', #The entire dataset takes up approximately 80+ GB
