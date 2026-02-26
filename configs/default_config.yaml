@@ -2,7 +2,9 @@
 project_name: 'efficient_training'
 work_root: 'efficient_diffusion_training'
 exp_name: 'exp'
-llama_path: 'meta-llama/Llama-3.2-1B'
+# Klein 4B text encoder (Flux2KleinPipeline)
+text_encoder_path: 'black-forest-labs/FLUX.2-klein-base-4B'
+llama_path: 'meta-llama/Llama-3.2-1B'  # fallback if text_encoder_path not set
 
 model:
   _target_: core.models.transformer_emmdit.EMMDiTTransformer
@@ -12,8 +14,8 @@ model:
   sample_size: ${.latent_size}
   in_channels: 32
   out_channels: 32
-  caption_max_seq_length: 120
-  caption_channels: 2048
+  caption_max_seq_length: 512  # Qwen3/Klein uses 512
+  caption_channels: 4608  # overridden from pipeline: 3 layers * hidden_size
   #arch: 'sub'
 
   # transformer params

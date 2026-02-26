@@ -22,7 +22,7 @@ from diffusers.training_utils import (
 from torch.utils.data import DataLoader
 from safetensors.torch import load_file
 from omegaconf import OmegaConf
-from transformers import AutoModelForCausalLM,AutoTokenizer
+from diffusers import Flux2KleinPipeline
 
 from core.utils import (token_drop, get_sigmas, ema_update)
 from core.opt import build_opt
@@ -31,6 +31,20 @@ from core.loss import build_loss
 
 logging.basicConfig(level=logging.INFO)
 logger = get_logger(__name__)
+
+
+def _get_qwen3_attention_mask(tokenizer, prompt, max_length, device):
+    """Get attention_mask using same tokenization as Flux2KleinPipeline._get_qwen3_prompt_embeds."""
+    prompt = [prompt] if isinstance(prompt, str) else prompt
+    masks = []
+    for p in prompt:
+        messages = [{"role": "user", "content": p}]
+        text = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
+        )
+        out = tokenizer(text, return_tensors="pt", padding="max_length", truncation=True, max_length=max_length)
+        masks.append(out["attention_mask"])
+    return torch.cat(masks, dim=0).to(device)
 
 
 def load_config(path):
@@ -85,21 +99,36 @@ def main(args):
                                                 shift=cfg.training.fm_shift)
     noise_scheduler_copy = deepcopy(noise_scheduler)  # Klein: use copy for timestep/sigma lookup
 
+    # Load Klein pipeline for text encoding (uses pipeline methods, no duplication)
+    text_encoder_path = OmegaConf.select(cfg, "text_encoder_path", default=cfg.llama_path)
+    pipe_kwargs = {"torch_dtype": torch.bfloat16}
+    if OmegaConf.select(cfg, "text_encoder_variant", default=None) is not None:
+        pipe_kwargs["variant"] = cfg.text_encoder_variant
+    pipe = Flux2KleinPipeline.from_pretrained(text_encoder_path, **pipe_kwargs)
+    pipe.text_encoder.requires_grad_(False)
+    pipe.text_encoder = pipe.text_encoder.to(accelerator.device)
+    pipe.text_encoder = torch.compile(pipe.text_encoder)
+    text_encoder_out_layers = tuple(OmegaConf.select(cfg, "text_encoder_out_layers", default=[9, 18, 27]))
+    max_sequence_length = OmegaConf.select(cfg.model, "max_sequence_length", default=512)
+
+    # Null prompt via pipeline encode_prompt (Klein uses "" as negative)
+    with torch.no_grad():
+        uncond_prompt_embeds, _ = pipe.encode_prompt(
+            "",
+            device=accelerator.device,
+            max_sequence_length=max_sequence_length,
+            text_encoder_out_layers=text_encoder_out_layers,
+        )
+        uncond_prompt_attention_mask = _get_qwen3_attention_mask(
+            pipe.tokenizer, "", max_sequence_length, accelerator.device
+        )
+
+    # Model dims from Qwen3: caption_channels = num_layers * hidden_size
+    caption_channels = len(text_encoder_out_layers) * pipe.text_encoder.config.hidden_size
+    OmegaConf.update(cfg, "model.caption_channels", caption_channels, merge=True)
+    OmegaConf.update(cfg, "model.caption_max_seq_length", max_sequence_length, merge=True)
+
     model = build_transformer(cfg.model)
-
-    tokenizer = AutoTokenizer.from_pretrained(cfg.llama_path)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    model_text_encoder = AutoModelForCausalLM.from_pretrained(cfg.llama_path, torch_dtype=torch.bfloat16)
-    model_text_encoder.requires_grad_(False)
-    model_text_encoder = model_text_encoder.to(accelerator.device)
-    model_text_encoder = torch.compile(model_text_encoder)
-
-
-    inputs = tokenizer('', return_tensors="pt", padding='max_length', max_length=cfg.model.caption_max_seq_length, truncation=True)
-    inputs.to(accelerator.device)
-    uncond_prompt_embeds = model_text_encoder(**inputs, output_hidden_states=True)['hidden_states'][-1]
-    uncond_prompt_attention_mask = inputs['attention_mask']
 
     if cfg.model.flashSA is not None:
         if cfg.model.flashSA == 'Joint_SA':
@@ -214,10 +243,15 @@ def main(args):
 
             if cfg.dataset.precompute_txt_emb is False:
                 with torch.no_grad():
-                    inputs = tokenizer(prompts, return_tensors="pt", padding='max_length', max_length=cfg.model.caption_max_seq_length, truncation=True)
-                    inputs.to(accelerator.device)
-                    txt_emb = model_text_encoder(**inputs, output_hidden_states=True)['hidden_states'][-1] #torch.Size([1, 128, 2048])
-                    txt_mask = inputs['attention_mask'] #torch.Size([1, 128])
+                    txt_emb, _ = pipe.encode_prompt(
+                        prompts,
+                        device=accelerator.device,
+                        max_sequence_length=max_sequence_length,
+                        text_encoder_out_layers=text_encoder_out_layers,
+                    )
+                    txt_mask = _get_qwen3_attention_mask(
+                        pipe.tokenizer, prompts, max_sequence_length, accelerator.device
+                    )
 
             latents = (image_latents * cfg.training.scaling_factor).to(weight_dtype)
             txt_mask = txt_mask.to(accelerator.device)
