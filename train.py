@@ -253,7 +253,8 @@ def main(args):
                         pipe.tokenizer, prompts, max_sequence_length, accelerator.device
                     )
 
-            latents = (image_latents * cfg.training.scaling_factor).to(weight_dtype)
+            # Flux2: latents already patchified+BN from precompute, no scaling_factor
+            latents = image_latents.to(weight_dtype)
             txt_mask = txt_mask.to(accelerator.device)
             
             y = txt_emb.to(weight_dtype).to(accelerator.device)

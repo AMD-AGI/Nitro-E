@@ -61,16 +61,18 @@ class StreamingLatentsDataset(StreamingDataset):
 
         #print(sample.keys()) #"caption", "dino_feat", "jpg", "latents_512", "text_feat", "text_mask"
         
+        # Flux2 format: VAE encode (32,H,W) -> patchify 2x2 -> (128,H/2,W/2)
+        # 512px: (128, 32, 32), 1024px: (128, 64, 64)
         if 'latents_512' in sample:
             image_latents = torch.from_numpy(
                 np.frombuffer(sample['latents_512'], dtype=np.float16)
                 .copy()
-            ).reshape(-1, self.latent_size, self.latent_size).float()
+            ).reshape(128, self.latent_size, self.latent_size).float()
         if 'latents_1024' in sample:
             image_latents = torch.from_numpy(
                 np.frombuffer(sample['latents_1024'], dtype=np.float16)
                 .copy()
-            ).reshape(-1, self.latent_size, self.latent_size).float()
+            ).reshape(128, self.latent_size, self.latent_size).float()
         
         dino_feat = torch.zeros([256,768])
         text_feat = torch.zeros([128,2048])
@@ -107,7 +109,7 @@ class StreamingLatentsDataset(StreamingDataset):
 def build_streaming_latents_dataloader(
     dataset_config,
     batch_size: int,
-    latent_size: int = 16,
+    latent_size: int = 32,
     caption_max_seq_length: int = 120,
     caption_channels: int = 1024,
     shuffle: bool = True,
@@ -155,7 +157,7 @@ class DummyDataset(Dataset):
         return 1000000
 
     def __getitem__(self, idx):
-        img_latent = torch.randn((32, self.latent_size, self.latent_size))
+        img_latent = torch.randn((128, self.latent_size, self.latent_size))
         txt_emb = torch.randn((self.caption_max_seq_length, self.caption_channels))
         txt_mask = torch.ones((self.caption_max_seq_length)).long()
         dino_feat = torch.randn((256, 768))

@@ -10,10 +10,10 @@ model:
   _target_: core.models.transformer_emmdit.EMMDiTTransformer
   flashSA: 'Joint_SA' # choose from ['none', 'Joint_SA']
   patch_size: 1
-  latent_size: 16
+  latent_size: 32  # Flux2 after patchify: 32 for 512px, 64 for 1024px
   sample_size: ${.latent_size}
-  in_channels: 32
-  out_channels: 32
+  in_channels: 128  # Flux2: VAE 32 -> patchify 2x2 -> 128
+  out_channels: 128
   caption_max_seq_length: 512  # Qwen3/Klein uses 512
   caption_channels: 4608  # overridden from pipeline: 3 layers * hidden_size
   #arch: 'sub'
@@ -36,7 +36,6 @@ training:
   max_iters: 200000
   class_dropout_prob: 0.1 # dropping prob for classifier-free guidance
   null_emb_path: 'data/null_emb.pth'
-  scaling_factor: 0.41407 # scaling factor for VAE
   save_freq: 5000
   grad_checkpointing: False
   nblocks_to_apply_grad_checkpointing: -1 # -1 for all blocks
