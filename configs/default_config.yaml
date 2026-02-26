@@ -14,8 +14,9 @@ model:
   sample_size: ${.latent_size}
   in_channels: 128  # Flux2: VAE 32 -> patchify 2x2 -> 128
   out_channels: 128
-  caption_max_seq_length: 512  # Qwen3/Klein uses 512
+  caption_max_seq_length: 512  # Klein uses 512
   caption_channels: 4608  # overridden from pipeline: 3 layers * hidden_size
+  text_encoder_out_layers: [9, 18, 27]  # Klein Qwen3 layers
   #arch: 'sub'
 
   # transformer params
@@ -44,6 +45,10 @@ training:
   start_step: 0
   use_ema: False
   ema_rate: 0.9999
+
+  # Klein alignment (Phase 4/5)
+  timestep_scale: 1000  # pass t/1000 to model (Klein convention)
+  loss_patchify_mask: false  # direct MSE, no patchify mask (Klein-style)
 
   # args for timestep sampling
   weighting_scheme: 'logit_normal' 
