@@ -75,8 +75,9 @@ class StreamingLatentsDataset(StreamingDataset):
             ).reshape(128, self.latent_size, self.latent_size).float()
         
         dino_feat = torch.zeros([256,768])
-        text_feat = torch.zeros([128,2048])
-        text_mask = torch.zeros([128])
+        seq_len = self.caption_max_seq_length or 128
+        channels = self.caption_channels or 2048
+        text_feat = torch.zeros([seq_len, channels])
         if 'dino_feat' in sample:
             dino_feat = torch.from_numpy(
                 np.frombuffer(sample['dino_feat'], dtype=np.float16)
@@ -87,21 +88,16 @@ class StreamingLatentsDataset(StreamingDataset):
             text_feat = torch.from_numpy(
                 np.frombuffer(sample['text_feat'], dtype=np.float16)
                 .copy()
-            ).reshape(128, 2048).float()
-        if 'text_mask' in sample:
-            text_mask = torch.from_numpy(
-                np.frombuffer(sample['text_mask'], dtype=np.int64)
-                .copy()
-            ).reshape(128)
-            
-            
+            ).reshape(seq_len, channels).float()
+        # No text_mask: training computes attention mask from caption when precompute_txt_emb
+        text_mask = None
+
         jpg_tensor = torch.zeros([3, 224, 224])
         if 'jpg' in sample:
             jpg = sample['jpg']
             jpg_tensor = self.transform(jpg)
-         
-        if 'caption' in sample:
-            prompt = sample['caption']
+
+        prompt = sample.get('caption', '')
 
         return image_latents, prompt, jpg_tensor, text_feat, text_mask, dino_feat
 
@@ -159,8 +155,7 @@ class DummyDataset(Dataset):
     def __getitem__(self, idx):
         img_latent = torch.randn((128, self.latent_size, self.latent_size))
         txt_emb = torch.randn((self.caption_max_seq_length, self.caption_channels))
-        txt_mask = torch.ones((self.caption_max_seq_length)).long()
         dino_feat = torch.randn((256, 768))
         jpg_tensor = torch.zeros([3, 224, 224])
-        
-        return (img_latent, txt_emb, txt_mask, dino_feat, jpg_tensor)
+        prompt = ""  # DummyDataset: training computes mask from prompt when needed
+        return (img_latent, prompt, jpg_tensor, txt_emb, None, dino_feat)

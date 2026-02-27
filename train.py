@@ -77,7 +77,7 @@ def _klein_training_step(
     image_latents, prompts, _, txt_emb, txt_mask, _ = batch
     image_latents = image_latents.to(accelerator.device)
 
-    # 2. Encode prompts -> prompt_embeds
+    # 2. Encode prompts -> prompt_embeds (or use precomputed)
     if cfg.dataset.precompute_txt_emb is False:
         with torch.no_grad():
             txt_emb, _ = pipe.encode_prompt(
@@ -86,9 +86,10 @@ def _klein_training_step(
                 max_sequence_length=max_sequence_length,
                 text_encoder_out_layers=text_encoder_out_layers,
             )
-            txt_mask = _get_qwen3_attention_mask(
-                pipe.tokenizer, prompts, max_sequence_length, accelerator.device
-            )
+    # Compute attention mask from prompts (no precomputed mask)
+    txt_mask = _get_qwen3_attention_mask(
+        pipe.tokenizer, prompts, max_sequence_length, accelerator.device
+    )
     y = txt_emb.to(weight_dtype).to(accelerator.device)
     y_mask = txt_mask.to(weight_dtype).to(accelerator.device)
     y, y_mask = token_drop(

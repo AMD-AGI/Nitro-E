@@ -80,7 +80,7 @@ optimizer:
 
 dataset:
   use_dummy_data: False
-  precompute_txt_emb: False
+  precompute_txt_emb: True  # use precomputed Flux Klein text embeddings
   datasets: [
     'train',
     'valid' 
