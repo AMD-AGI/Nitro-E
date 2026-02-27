@@ -9,8 +9,6 @@ import logging
 import torch
 from copy import deepcopy
 import wandb
-import einops
-
 from accelerate.logging import get_logger
 from accelerate import Accelerator, InitProcessGroupKwargs
 from accelerate.utils import DistributedType
@@ -26,8 +24,8 @@ from diffusers import Flux2KleinPipeline
 
 from core.utils import (token_drop, get_sigmas, ema_update)
 from core.opt import build_opt
-from core.model_builder import build_transformer
 from core.loss import build_loss
+from core.flux2_utils import pack_latents, unpack_latents_with_ids, prepare_latent_ids, prepare_text_ids
 
 logging.basicConfig(level=logging.INFO)
 logger = get_logger(__name__)
@@ -62,17 +60,16 @@ def _klein_training_step(
     accelerator,
 ):
     """
-    Klein-style training step. Mirrors train_dreambooth_lora_flux2_klein / pipeline_flux2_klein flow:
+    Flux Klein training step:
     1. Get batch (latents, prompts)
-    2. Encode prompts -> prompt_embeds
+    2. Encode prompts -> prompt_embeds (or use precomputed)
     3. Prepare latents (Flux2: already patchified+BN from precompute)
     4. Sample timesteps, get sigmas
     5. noisy_latents = (1 - sigma) * latents + sigma * noise
     6. target = noise - latents
-    7. model_pred = model(..., timestep=t/timestep_scale)
-    8. [EMMDiT: reshape model_pred to spatial; Flux2 packed would use unpack_latents_with_ids]
+    7. Pack latents, prepare ids, model forward (Flux2Transformer2DModel)
+    8. Unpack model_pred to spatial for loss
     9. loss = weighted_mse(model_pred, target)
-    10. backward, step
     """
     image_latents, prompts, _, txt_emb, txt_mask, _ = batch
     image_latents = image_latents.to(accelerator.device)
@@ -128,30 +125,29 @@ def _klein_training_step(
     # 6. target = noise - latents
     target = noise - latents
 
-    # 7. model_pred (Klein: timestep = t / timestep_scale)
-    model_pred, _ = model(
-        hidden_states=noisy_latents,
+    # 7. Flux2: pack latents, prepare ids, model forward
+    packed_noisy = pack_latents(noisy_latents)
+    img_ids = prepare_latent_ids(noisy_latents).to(noisy_latents.device)
+    txt_ids = prepare_text_ids(y).to(y.device)
+    joint_attention_kwargs = {"encoder_attention_mask": y_mask}
+    timestep_scale = OmegaConf.select(cfg.training, "timestep_scale", default=1000)
+    model_output = model(
+        hidden_states=packed_noisy,
         encoder_hidden_states=y,
         timestep=timesteps.to(noisy_latents.dtype) / float(timestep_scale),
-        encoder_attention_mask=y_mask,
-        added_cond_kwargs={'resolution': None, 'aspect_ratio': None},
+        img_ids=img_ids,
+        txt_ids=txt_ids,
+        joint_attention_kwargs=joint_attention_kwargs,
         return_dict=False,
     )
+    model_pred = model_output[0] if isinstance(model_output, tuple) else model_output.sample
 
-    # 8. EMMDiT: reshape model_pred to spatial (B,C,H,W)
+    # 8. Unpack model_pred to spatial (B,C,H,W) for loss
+    model_pred = unpack_latents_with_ids(model_pred, img_ids)
+
     weighting = compute_loss_weighting_for_sd3(
         weighting_scheme=cfg.training.weighting_scheme, sigmas=sigmas
     )
-    p = cfg.model.patch_size
-    h_lat, w_lat = noisy_latents.shape[-2:]
-    h_token, w_token = h_lat // p, w_lat // p
-    model_pred = einops.rearrange(
-        model_pred,
-        'b (h w) (p1 p2 c) -> b c (h p1) (w p2)',
-        h=h_token, w=w_token, p1=p, p2=p,
-    )
-
-    # 9. loss = weighted_mse(model_pred, target)
     loss = loss_fn(model_pred, target, weighting=weighting)
     return loss
 
@@ -208,12 +204,12 @@ def main(args):
                                                 shift=cfg.training.fm_shift)
     noise_scheduler_copy = deepcopy(noise_scheduler)  # Klein: use copy for timestep/sigma lookup
 
-    # Load Klein pipeline for text encoding (uses pipeline methods, no duplication)
-    text_encoder_path = OmegaConf.select(cfg, "text_encoder_path", default=cfg.llama_path)
+    # Load Flux Klein 4B pipeline (transformer + text encoder)
+    model_path = OmegaConf.select(cfg, "model_path", default=cfg.text_encoder_path)
     pipe_kwargs = {"torch_dtype": torch.bfloat16}
     if OmegaConf.select(cfg, "text_encoder_variant", default=None) is not None:
         pipe_kwargs["variant"] = cfg.text_encoder_variant
-    pipe = Flux2KleinPipeline.from_pretrained(text_encoder_path, **pipe_kwargs)
+    pipe = Flux2KleinPipeline.from_pretrained(model_path, **pipe_kwargs)
     pipe.text_encoder.requires_grad_(False)
     pipe.text_encoder = pipe.text_encoder.to(accelerator.device)
     pipe.text_encoder = torch.compile(pipe.text_encoder)
@@ -239,12 +235,8 @@ def main(args):
     OmegaConf.update(cfg, "model.caption_channels", caption_channels, merge=True)
     OmegaConf.update(cfg, "model.caption_max_seq_length", max_sequence_length, merge=True)
 
-    model = build_transformer(cfg.model)
-
-    if cfg.model.flashSA is not None:
-        if cfg.model.flashSA == 'Joint_SA':
-            from core.models.flash_attn_processor import JointAttnProcessor2_0_FA
-            model.set_attn_processor(JointAttnProcessor2_0_FA()) 
+    # Use Flux Klein transformer from pipeline
+    model = pipe.transformer
 
     if cfg.training.transformer_ckpt != '':
         state_dict = load_file(cfg.training.transformer_ckpt)

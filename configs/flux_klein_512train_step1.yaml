@@ -1,0 +1,24 @@
+_base_: configs/default_config.yaml
+
+project_name: '512'
+exp_name: '512step1'
+model:
+  caption_max_seq_length: 512
+
+training:
+  save_freq: 50000
+  max_iters: 100000
+  gradient_clip: 0.5
+
+optimizer:
+  opt_kwargs:
+    lr: 3e-4
+
+dataset:
+  precompute_txt_emb: False
+  datasets: [
+    'datasets/prepare/datadir/mds/mds_train_512diffdb_fromflux',
+    'datasets/prepare/datadir/mds/mds_train_512ucsc_fromflux',
+    'datasets/prepare/datadir/mds/mds_train_512jdb',
+    'datasets/prepare/datadir/mds/mds_train_512sa1b',
+  ]
