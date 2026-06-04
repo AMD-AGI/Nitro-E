@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+# Credentials / private keys
+credentials.json
+*credentials*.json
+secrets.json
+*secret*.json
+*.pem
+*.key
+*.p12
+*.pyc
+*__pycache__
+output*
+/models*
+/checkpoints*
