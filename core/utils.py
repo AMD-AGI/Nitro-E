@@ -5,14 +5,25 @@ import torch
 import torch.nn as nn
 import einops
 
-# get sigmas from noise_scheduler
-def get_sigmas(timesteps, noise_scheduler, n_dim=4):
+def get_sigmas(timesteps, noise_scheduler, n_dim=4, device=None, dtype=None):
+    """
+    Klein diffusers convention: get sigmas for given timesteps from scheduler.
+    Matches train_dreambooth_lora_flux2_klein.py logic.
+    """
     sigmas = noise_scheduler.sigmas
     schedule_timesteps = noise_scheduler.timesteps
+    if device is not None:
+        sigmas = sigmas.to(device=device)
+        schedule_timesteps = schedule_timesteps.to(device)
+    if dtype is not None:
+        sigmas = sigmas.to(dtype=dtype)
+    if device is not None:
+        timesteps = timesteps.to(device)
     step_indices = [(schedule_timesteps == t).nonzero().item() for t in timesteps]
-    sigma = sigmas[step_indices]
-    sigma = sigma.view(-1, *([1]*(n_dim-1)))
-    return sigma.clone()
+    sigma = sigmas[step_indices].flatten()
+    while len(sigma.shape) < n_dim:
+        sigma = sigma.unsqueeze(-1)
+    return sigma
 
 def ema_update(model_dest: nn.Module, model_src: nn.Module, rate):
     param_dict_src = dict(model_src.named_parameters())

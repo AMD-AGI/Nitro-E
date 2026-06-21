@@ -9,8 +9,6 @@ import logging
 import torch
 from copy import deepcopy
 import wandb
-import einops
-
 from accelerate.logging import get_logger
 from accelerate import Accelerator, InitProcessGroupKwargs
 from accelerate.utils import DistributedType
@@ -22,22 +20,153 @@ from diffusers.training_utils import (
 from torch.utils.data import DataLoader
 from safetensors.torch import load_file
 from omegaconf import OmegaConf
-from transformers import AutoModelForCausalLM,AutoTokenizer
+from diffusers import Flux2KleinPipeline
 
-from core.utils import (token_drop,  
-                        get_sigmas, patchify_and_apply_mask,
-                        ema_update)
+from core.utils import (token_drop, get_sigmas, ema_update)
 from core.opt import build_opt
-from core.loss import calc_diff_loss, calc_proj_loss
+from core.loss import build_loss
+from core.flux2_utils import pack_latents, unpack_latents_with_ids, prepare_latent_ids, prepare_text_ids
 
 logging.basicConfig(level=logging.INFO)
 logger = get_logger(__name__)
 
 
+def _get_qwen3_attention_mask(tokenizer, prompt, max_length, device):
+    """Get attention_mask using same tokenization as Flux2KleinPipeline._get_qwen3_prompt_embeds."""
+    prompt = [prompt] if isinstance(prompt, str) else prompt
+    masks = []
+    for p in prompt:
+        messages = [{"role": "user", "content": p}]
+        text = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
+        )
+        out = tokenizer(text, return_tensors="pt", padding="max_length", truncation=True, max_length=max_length)
+        masks.append(out["attention_mask"])
+    return torch.cat(masks, dim=0).to(device)
+
+
+def _klein_training_step(
+    model,
+    batch,
+    pipe,
+    cfg,
+    loss_fn,
+    noise_scheduler_copy,
+    uncond_prompt_embeds,
+    uncond_prompt_attention_mask,
+    max_sequence_length,
+    text_encoder_out_layers,
+    weight_dtype,
+    accelerator,
+):
+    """
+    Flux Klein training step:
+    1. Get batch (latents, prompts)
+    2. Encode prompts -> prompt_embeds (or use precomputed)
+    3. Prepare latents (Flux2: already patchified+BN from precompute)
+    4. Sample timesteps, get sigmas
+    5. noisy_latents = (1 - sigma) * latents + sigma * noise
+    6. target = noise - latents
+    7. Pack latents, prepare ids, model forward (Flux2Transformer2DModel)
+    8. Unpack model_pred to spatial for loss
+    9. loss = weighted_mse(model_pred, target)
+    """
+    image_latents, prompts, _, txt_emb, txt_mask, _ = batch
+    image_latents = image_latents.to(accelerator.device)
+
+    # 2. Encode prompts -> prompt_embeds (or use precomputed)
+    if cfg.dataset.precompute_txt_emb is False:
+        with torch.no_grad():
+            txt_emb, _ = pipe.encode_prompt(
+                prompts,
+                device=accelerator.device,
+                max_sequence_length=max_sequence_length,
+                text_encoder_out_layers=text_encoder_out_layers,
+            )
+    # Compute attention mask from prompts (no precomputed mask)
+    txt_mask = _get_qwen3_attention_mask(
+        pipe.tokenizer, prompts, max_sequence_length, accelerator.device
+    )
+    y = txt_emb.to(weight_dtype).to(accelerator.device)
+    y_mask = txt_mask.to(weight_dtype).to(accelerator.device)
+    y, y_mask = token_drop(
+        y, y_mask,
+        uncond_prompt_embeds,
+        uncond_prompt_attention_mask,
+        cfg.training.class_dropout_prob,
+    )
+
+    # 3. Prepare latents (Flux2 format from precompute)
+    latents = image_latents.to(weight_dtype)
+    bs = latents.shape[0]
+    noise = torch.randn_like(latents)
+
+    # 4. Sample timesteps, get sigmas
+    timestep_scale = OmegaConf.select(cfg.training, "timestep_scale", default=1000)
+    u = compute_density_for_timestep_sampling(
+        weighting_scheme=cfg.training.weighting_scheme,
+        batch_size=bs,
+        logit_mean=cfg.training.logit_mean,
+        logit_std=cfg.training.logit_std,
+        mode_scale=cfg.training.mode_scale,
+    )
+    indices = (u * noise_scheduler_copy.config.num_train_timesteps).long()
+    timesteps = noise_scheduler_copy.timesteps[indices].to(device=accelerator.device)
+    sigmas = get_sigmas(
+        timesteps, noise_scheduler_copy,
+        n_dim=latents.ndim,
+        device=accelerator.device,
+        dtype=latents.dtype,
+    )
+
+    # 5. Flow matching: noisy_latents = (1 - sigma) * latents + sigma * noise
+    noisy_latents = (1.0 - sigmas) * latents + sigmas * noise
+
+    # 6. target = noise - latents
+    target = noise - latents
+
+    # 7. Flux2: pack latents, prepare ids, model forward
+    packed_noisy = pack_latents(noisy_latents)
+    img_ids = prepare_latent_ids(noisy_latents).to(noisy_latents.device)
+    txt_ids = prepare_text_ids(y).to(y.device)
+    joint_attention_kwargs = {"encoder_attention_mask": y_mask}
+    timestep_scale = OmegaConf.select(cfg.training, "timestep_scale", default=1000)
+    model_output = model(
+        hidden_states=packed_noisy,
+        encoder_hidden_states=y,
+        timestep=timesteps.to(noisy_latents.dtype) / float(timestep_scale),
+        img_ids=img_ids,
+        txt_ids=txt_ids,
+        joint_attention_kwargs=joint_attention_kwargs,
+        return_dict=False,
+    )
+    model_pred = model_output[0] if isinstance(model_output, tuple) else model_output.sample
+
+    # 8. Unpack model_pred to spatial (B,C,H,W) for loss
+    model_pred = unpack_latents_with_ids(model_pred, img_ids)
+
+    weighting = compute_loss_weighting_for_sd3(
+        weighting_scheme=cfg.training.weighting_scheme, sigmas=sigmas
+    )
+    loss = loss_fn(model_pred, target, weighting=weighting)
+    return loss
+
+
+def load_config(path):
+    """Load config, resolving _base_ inheritance if present."""
+    cfg = OmegaConf.load(path)
+    if "_base_" in cfg:
+        base_path = cfg._base_
+        if not isinstance(base_path, str):
+            base_path = base_path[0]  # allow list, use first
+        base_cfg = load_config(base_path)
+        cfg = OmegaConf.merge(base_cfg, cfg)
+        del cfg["_base_"]
+    return cfg
+
+
 def main(args):
-    default_cfg = OmegaConf.load("configs/default_config.yaml")
-    custom_cfg = OmegaConf.load(args.config)
-    cfg = OmegaConf.merge(default_cfg, custom_cfg)
+    cfg = load_config(args.config)
     
 
     proj_dir = os.path.join(cfg.work_root, cfg.exp_name)
@@ -73,61 +202,44 @@ def main(args):
 
     noise_scheduler = FlowMatchEulerDiscreteScheduler(num_train_timesteps=cfg.training.num_train_timesteps,
                                                 shift=cfg.training.fm_shift)
+    noise_scheduler_copy = deepcopy(noise_scheduler)  # Klein: use copy for timestep/sigma lookup
 
-    from core.models.transformer_emmdit import EMMDiTTransformer
-    model = EMMDiTTransformer(
-            in_channels=cfg.model.in_channels,
-            out_channels=cfg.model.out_channels,
-            sample_size=cfg.model.latent_size,
-            patch_size=cfg.model.patch_size,
-            caption_channels=cfg.model.caption_channels,
-            qk_norm='rms_norm',
-            repa_depth=cfg.model.repa_depth,
-            projector_dim=cfg.model.projector_dim,
-            z_dims=cfg.model.z_dims,
-            use_sub_attn = True,
+    # Load Flux Klein 4B pipeline (transformer + text encoder)
+    model_path = OmegaConf.select(cfg, "model_path", default=cfg.text_encoder_path)
+    pipe_kwargs = {"torch_dtype": torch.bfloat16}
+    if OmegaConf.select(cfg, "text_encoder_variant", default=None) is not None:
+        pipe_kwargs["variant"] = cfg.text_encoder_variant
+    pipe = Flux2KleinPipeline.from_pretrained(model_path, **pipe_kwargs)
+    pipe.text_encoder.requires_grad_(False)
+    pipe.text_encoder = pipe.text_encoder.to(accelerator.device)
+    pipe.text_encoder = torch.compile(pipe.text_encoder)
+    text_encoder_out_layers = tuple(
+        OmegaConf.select(cfg, "model.text_encoder_out_layers", default=[9, 18, 27])
+    )
+    max_sequence_length = OmegaConf.select(cfg.model, "max_sequence_length", default=512)
+
+    # Null prompt via pipeline encode_prompt (Klein uses "" as negative)
+    with torch.no_grad():
+        uncond_prompt_embeds, _ = pipe.encode_prompt(
+            "",
+            device=accelerator.device,
+            max_sequence_length=max_sequence_length,
+            text_encoder_out_layers=text_encoder_out_layers,
+        )
+        uncond_prompt_attention_mask = _get_qwen3_attention_mask(
+            pipe.tokenizer, "", max_sequence_length, accelerator.device
         )
 
-    if cfg.model.repa_depth != -1 and cfg.dataset.precompute_dino_feat is False:
-        import timm
-        visual_encoder = torch.hub.load('facebookresearch/dinov2', f'dinov2_vitb14')
-        del visual_encoder.head
-        visual_encoder.pos_embed.data = timm.layers.pos_embed.resample_abs_pos_embed(
-            visual_encoder.pos_embed.data, [16, 16],
-        )
-        visual_encoder.head = torch.nn.Identity()
-        visual_encoder = visual_encoder.to(accelerator.device)
-        visual_encoder.eval()
-        visual_encoder = torch.compile(visual_encoder)
-        
-    
-    tokenizer = AutoTokenizer.from_pretrained(cfg.llama_path)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    model_text_encoder = AutoModelForCausalLM.from_pretrained(cfg.llama_path, torch_dtype=torch.bfloat16)
-    model_text_encoder.requires_grad_(False)
-    model_text_encoder = model_text_encoder.to(accelerator.device)
-    model_text_encoder = torch.compile(model_text_encoder)
+    # Model dims from Qwen3: caption_channels = num_layers * hidden_size
+    caption_channels = len(text_encoder_out_layers) * pipe.text_encoder.config.hidden_size
+    OmegaConf.update(cfg, "model.caption_channels", caption_channels, merge=True)
+    OmegaConf.update(cfg, "model.caption_max_seq_length", max_sequence_length, merge=True)
 
-
-    inputs = tokenizer('', return_tensors="pt", padding='max_length', max_length=cfg.model.caption_max_seq_length, truncation=True)
-    inputs.to(accelerator.device)
-    uncond_prompt_embeds = model_text_encoder(**inputs, output_hidden_states=True)['hidden_states'][-1]
-    uncond_prompt_attention_mask = inputs['attention_mask']
-
-    if cfg.model.flashSA is not None:
-        if cfg.model.flashSA == 'Joint_SA':
-            from core.models.flash_attn_processor import JointAttnProcessor2_0_FA
-            model.set_attn_processor(JointAttnProcessor2_0_FA()) 
+    # Use Flux Klein transformer from pipeline
+    model = pipe.transformer
 
     if cfg.training.transformer_ckpt != '':
         state_dict = load_file(cfg.training.transformer_ckpt)
-        if cfg.model.repa_depth == -1:
-            new_state_dict = {}
-            for k in state_dict:
-                if 'projector' not in k:
-                    new_state_dict[k] = state_dict[k]
-            state_dict = new_state_dict
         model.load_state_dict(state_dict)
 
     logger.info(f"{model.__class__.__name__} Model Parameters: {sum(p.numel() for p in model.parameters()):,}")
@@ -190,6 +302,8 @@ def main(args):
 
     optimizer, lr_scheduler = accelerator.prepare(optimizer, lr_scheduler)
 
+    loss_fn = build_loss(cfg.training.loss)
+
     global_step = 0
 
     latest_path = os.path.join(proj_dir, 'checkpoints', 'checkpoint-latest')
@@ -219,91 +333,23 @@ def main(args):
     while True:
        
         for _, batch in enumerate(train_dataloader):
-            """ #use dummydata
-            image_latents, txt_emb, txt_mask, zs, jpg_tensors = batch
-            txt_emb = txt_emb.to(accelerator.device)
-            txt_mask = txt_mask.to(accelerator.device)
-            zs = zs.to(accelerator.device)
-            jpg_tensors = jpg_tensors.to(accelerator.device)
-            """
-            
-            image_latents, prompts, jpg_tensors, txt_emb, txt_mask, dino_feat = batch
-            dino_feat = dino_feat.to(accelerator.device)
-            zs = [dino_feat]
-            image_latents = image_latents.to(accelerator.device)
-            
-            if cfg.dataset.precompute_txt_emb is False:
-                with torch.no_grad():
-                    inputs = tokenizer(prompts, return_tensors="pt", padding='max_length', max_length=cfg.model.caption_max_seq_length, truncation=True)
-                    inputs.to(accelerator.device)
-                    txt_emb = model_text_encoder(**inputs, output_hidden_states=True)['hidden_states'][-1] #torch.Size([1, 128, 2048])
-                    txt_mask = inputs['attention_mask'] #torch.Size([1, 128])             
-                
-            if cfg.dataset.precompute_dino_feat is False:
-                with torch.no_grad():
-                    if cfg.model.repa_depth != -1:
-                        jpg_tensors = jpg_tensors.to(accelerator.device)
-                        z = visual_encoder.forward_features(jpg_tensors.cuda())
-                        z = z['x_norm_patchtokens'] #torch.Size([bs, 256, 768])
-                
-                        zs = [z]
-                    
-
-            latents = (image_latents * cfg.training.scaling_factor).to(weight_dtype)
-            txt_mask = txt_mask.to(accelerator.device)
-            
-            y = txt_emb.to(weight_dtype).to(accelerator.device)
-            y_mask = txt_mask.to(weight_dtype)
-            y, y_mask = token_drop(y, y_mask,
-                                   uncond_prompt_embeds,
-                                   uncond_prompt_attention_mask,
-                                   cfg.training.class_dropout_prob)
-
-            bs = latents.shape[0]
-            noise = torch.randn_like(latents)
-
-            # timestep sampling and mix latent with noise
-            u = compute_density_for_timestep_sampling(
-                    weighting_scheme=cfg.training.weighting_scheme,
-                    batch_size=bs,
-                    logit_mean=cfg.training.logit_mean,
-                    logit_std=cfg.training.logit_std,
-                    mode_scale=cfg.training.mode_scale,
-                )
-            indices = (u * noise_scheduler.config.num_train_timesteps).long()
-            timesteps = noise_scheduler.timesteps[indices]
-            sigmas = get_sigmas(timesteps, noise_scheduler, n_dim=latents.ndim).to(device=accelerator.device)
-            timesteps = timesteps.to(device=accelerator.device)
-            noisy_latents = (1.0 - sigmas) * latents + sigmas * noise
-
-
             grad_norm = None
             with accelerator.accumulate(model):
                 optimizer.zero_grad()
-                model_pred, zs_tilde = model(hidden_states=noisy_latents,
-                                    encoder_hidden_states=y,
-                                    timestep=timesteps,
-                                    encoder_attention_mask=y_mask,
-                                    added_cond_kwargs={'resolution': None, 'aspect_ratio': None},
-                                    return_dict=False)
-                weighting = compute_loss_weighting_for_sd3(weighting_scheme=cfg.training.weighting_scheme, sigmas=sigmas)
-                target = noise - latents
-
-                
-                model_pred = einops.rearrange(model_pred, 'n t (p1 p2 c) -> n c t (p1 p2)', 
-                                                p1=cfg.model.patch_size, p2=cfg.model.patch_size)
-
-                target = patchify_and_apply_mask(target, cfg.model.patch_size, )
-
-                diff_loss  = calc_diff_loss(model_pred, target, weighting)
-
-
-                if zs_tilde is not None:
-                    proj_loss = calc_proj_loss(zs, zs_tilde, )
-                    loss = diff_loss + proj_loss * cfg.training.proj_coeff
-                else:
-                    loss = diff_loss
-                
+                loss = _klein_training_step(
+                    model=model,
+                    batch=batch,
+                    pipe=pipe,
+                    cfg=cfg,
+                    loss_fn=loss_fn,
+                    noise_scheduler_copy=noise_scheduler_copy,
+                    uncond_prompt_embeds=uncond_prompt_embeds,
+                    uncond_prompt_attention_mask=uncond_prompt_attention_mask,
+                    max_sequence_length=max_sequence_length,
+                    text_encoder_out_layers=text_encoder_out_layers,
+                    weight_dtype=weight_dtype,
+                    accelerator=accelerator,
+                )
                 accelerator.backward(loss.contiguous())
                 if accelerator.sync_gradients:
                     if accelerator.distributed_type == DistributedType.FSDP:
@@ -322,10 +368,8 @@ def main(args):
                     if accelerator.sync_gradients: 
                         ema_update(accelerator.unwrap_model(model_ema), accelerator.unwrap_model(model), cfg.training.ema_rate)
 
-            logs = {'loss': accelerator.gather(diff_loss).mean().item(), 
-                        'lr': lr_scheduler.get_last_lr()[0]}
-            if zs_tilde is not None:
-                logs['proj_loss'] = accelerator.gather(proj_loss).mean().item()
+            logs = {'loss': accelerator.gather(loss).mean().item(),
+                    'lr': lr_scheduler.get_last_lr()[0]}
             if grad_norm is not None:
                 logs['grad_norm'] = accelerator.gather(grad_norm).mean().item()
 

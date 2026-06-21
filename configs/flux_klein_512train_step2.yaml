@@ -1,0 +1,20 @@
+_base_: configs/default_config.yaml
+
+project_name: '512'
+exp_name: '512step2'
+model:
+  caption_max_seq_length: 512
+
+training:
+  save_freq: 10000
+  max_iters: 50000
+  transformer_ckpt: ''  # path to step1 checkpoint to resume/finetune
+  use_ema: True
+
+dataset:
+  precompute_txt_emb: False
+  datasets: [
+    'datasets/prepare/datadir/mds/mds_train_512diffdb_fromflux',
+    'datasets/prepare/datadir/mds/mds_train_512ucsc_fromflux',
+    'datasets/prepare/datadir/mds/mds_train_512jdb',
+  ]
