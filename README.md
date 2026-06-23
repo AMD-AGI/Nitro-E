@@ -130,7 +130,7 @@ images = pipe(prompt=prompt, width=resolution, height=resolution, num_inference_
 
 ## 🔗 Related Projects
 - [Nitro-T](https://github.com/AMD-AGI/Nitro-T): Efficient Training of diffusion models.
-- [Nitor-1](https://github.com/AMD-AGI/Nitro-1): One-step distillation of diffusion models.
+- [Nitro-1](https://github.com/AMD-AGI/Nitro-1): One-step distillation of diffusion models.
 
 
 ## License
